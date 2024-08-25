@@ -1,180 +1,227 @@
+import sys
 import json
+import asyncio
 import time
 import keyboard
 import pyaudio
 import pyautogui
 from plyer import notification
 from vosk import Model, KaldiRecognizer
+from PyQt5.QtCore import QThread, pyqtSignal, Qt
+from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QLabel, QVBoxLayout, QWidget
+from PyQt5.QtGui import QIcon
+import warnings
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
-model = Model('model')
-rec = KaldiRecognizer(model, 16000)
-p = pyaudio.PyAudio()
-stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=8000)
-stream.start_stream()
+class VoiceThread(QThread):
+    update_status_signal = pyqtSignal(str)
 
-voice_control_enabled = False
+    def __init__(self, model_path, mode='default'):
+        super().__init__()
+        self.model_path = model_path
+        self.mode = mode
+        self.running = True
+        self.voice_control_enabled = False
+
+    def run(self):
+        asyncio.run(self.async_run())
+
+    async def async_run(self):
+        try:
+            model = Model(self.model_path)
+        except Exception as e:
+            self.update_status_signal.emit(f'Ошибка загрузки модели: {str(e)}')
+            return
+
+        rec = KaldiRecognizer(model, 16000)
+        p = pyaudio.PyAudio()
+
+        stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=1024)
+
+        self.update_status_signal.emit(
+            f'Голосовое управление запущено в режиме: {"1С" if self.mode == "1c" else "Обычный"}')
+
+        try:
+            stream.start_stream()
+
+            async for text in self.async_listen(stream, rec):
+                if not self.running:
+                    break
+
+                zbstxt = self.process_text(text)
+
+                if text == 'старт':
+                    self.voice_control_enabled = True
+                    self.update_status_signal.emit('Голосовое управление включено!')
+                    notification.notify(title="Voice1C", message="Программа запущена!", app_icon='open.ico', timeout=2)
+                elif text == 'стоп':
+                    self.voice_control_enabled = False
+                    self.update_status_signal.emit('Голосовое управление остановлено!')
+                    notification.notify(title="Voice1C", message="Программа остановлена!", app_icon='close.ico',
+                                        timeout=2)
+                elif self.voice_control_enabled:
+                    asyncio.create_task(self.perform_action_async(text, zbstxt))
+
+        except Exception as e:
+            self.update_status_signal.emit(f'Ошибка при работе с аудиопотоком: {str(e)}')
+        finally:
+            stream.stop_stream()
+            stream.close()
+            p.terminate()
+
+    async def async_listen(self, stream, rec):
+        while self.running:
+            data = await asyncio.to_thread(stream.read, 1024, exception_on_overflow=False)
+            if rec.AcceptWaveform(data):
+                answer = json.loads(rec.Result())
+                if answer.get('text'):
+                    yield answer['text']
+            await asyncio.sleep(0.05)
+
+    def process_text(self, text):
+        replacements = {
+            "восклицательный знак": "!", "собака": "@", "двойная кавычках": '""',
+            "двойные кавычки": '""', "кавычках": "''", "кавычки": "''",
+            "решётка": "#", "доллар": "$", "точка с запятой": ";", "процент": "%", "двоеточие": ":",
+            "ампер сант": "&", "ампер санд": "&", "ампер санкт": "&", "амбер санд": "&", "амбер саунд": "&",
+            "амбер санкт": "&", "ампир санд": "&", "амбер сант": "&", "вопросительный знак": "?",
+            "знак вопроса": "?", "звёздочка": "*",
+            "квадратные скобки": "[]", "фигурные скобки": "{}", "скобки": "()",
+            "квадратная скобка": "[]", "фигурная скобка": "{}", "скобка": "()",
+            "тире": "-", "минус": "-", "плюс": "+", "равно": "=", "слэш": "/",
+            "один": "1", "два": "2", "три": "3", "четыре": "4", "пять": "5", "шесть": "6", "восемь": "8",
+            "семь": "7", "девять": "9", "ноль": "0", "точка": ".", "запятая": ", ", "нижнее подчёркивание": "_",
+            "больше": ">", "меньше": "<", "андерсон": "&", "ё": "е"
+        }
+
+        for key, value in replacements.items():
+            text = text.replace(key, value)
+
+        if self.mode == '1c':
+            text = text.title().replace(' ', '')
+            text = text.replace('Пробел', ' ')
+            text = text.replace('=', ' = ')
+            text = text.replace(',',', ')
+        else:
+            text = text.replace('пробел', ' ').capitalize()
+
+        return text
+
+    async def perform_action_async(self, text, zbstxt):
+        if text in ["эндер", "интер", "эмбер", "центр"]:
+            await asyncio.to_thread(keyboard.press_and_release, 'Enter')
+        elif text in ["тап", "табы", "тапа", "бы"]:
+            await asyncio.to_thread(keyboard.press_and_release, 'Tab')
+        elif text in ["удали", "вдали", "дали"]:
+            await asyncio.to_thread(self.delete_word)
+        elif text in ["точка с запятой"]:
+            await asyncio.to_thread(keyboard.write, ';')
+            await asyncio.to_thread(pyautogui.hotkey, 'enter')
+        elif text in ['лево', 'лева', 'влево', 'слева']:
+            await asyncio.to_thread(self.left)
+        elif text in ['право', 'права', 'вправо', 'правы', 'справа', 'в праву']:
+            await asyncio.to_thread(self.right)
+        elif text == "копье":
+            await asyncio.to_thread(pyautogui.hotkey, 'ctrl', 'c')
+            time.sleep(1)
+        elif text == "паста":
+            await asyncio.to_thread(pyautogui.hotkey, 'ctrl', 'v')
+        elif text == "вырезать":
+            await asyncio.to_thread(pyautogui.hotkey, 'ctrl', 'x')
+        elif text == "поиск":
+            await asyncio.to_thread(pyautogui.hotkey, 'ctrl', 'f')
+        else:
+            await asyncio.to_thread(keyboard.write, zbstxt)
+
+    def left(self):
+        keyboard.press_and_release('left')
+
+    def right(self):
+        keyboard.press_and_release('right')
+
+    def delete_word(self):
+        keyboard.press('ctrl')
+        keyboard.press('backspace')
+
+        time.sleep(0.05)
+
+        keyboard.release('backspace')
+        keyboard.release('ctrl')
+
+class VoiceControlApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle('Voice 1C')
+        self.setGeometry(100, 100, 600, 300)
+        self.setWindowIcon(QIcon('icon.ico'))
+        self.setFixedSize(600, 300)
+
+        self.status_label = QLabel('Выберите режим', self)
+        self.mode_selection_widget = QWidget(self)
+        self.mode_selection_layout = QVBoxLayout(self.mode_selection_widget)
+
+        self.mode_1c_button = QPushButton('Режим 1С', self)
+        self.default_mode_button = QPushButton('Обычный режим', self)
+        self.return_to_menu_button = QPushButton('Вернуться в меню', self)
+        self.return_to_menu_button.setVisible(False)
+
+        self.mode_selection_layout.addWidget(self.mode_1c_button)
+        self.mode_selection_layout.addWidget(self.default_mode_button)
+        self.mode_selection_widget.setLayout(self.mode_selection_layout)
+
+        main_layout = QVBoxLayout()
+        main_layout.addWidget(self.status_label, alignment=Qt.AlignCenter)
+        main_layout.addWidget(self.mode_selection_widget, alignment=Qt.AlignCenter)
+        main_layout.addWidget(self.return_to_menu_button, alignment=Qt.AlignCenter)
+
+        central_widget = QWidget()
+        central_widget.setLayout(main_layout)
+        self.setCentralWidget(central_widget)
+
+        self.load_stylesheet('styles.css')
+
+        self.mode_1c_button.clicked.connect(self.start_mode_1c)
+        self.default_mode_button.clicked.connect(self.start_default_mode)
+        self.return_to_menu_button.clicked.connect(self.return_to_menu)
+
+    def load_stylesheet(self, filename):
+        with open(filename, 'r') as f:
+            stylesheet = f.read()
+        self.setStyleSheet(stylesheet)
+
+    def start_mode_1c(self):
+        self.start_voice_thread('1c')
+
+    def start_default_mode(self):
+        self.start_voice_thread('default')
+
+    def start_voice_thread(self, mode):
+        self.status_label.setText(f'Запуск голосового управления ({mode})...')
+        self.mode_selection_widget.setVisible(False)
+        self.return_to_menu_button.setVisible(True)
+        try:
+            self.voice_thread = VoiceThread(model_path="model", mode=mode)
+            self.voice_thread.update_status_signal.connect(self.update_status)
+            self.voice_thread.start()
+        except Exception as e:
+            self.status_label.setText(f'Ошибка при запуске потока: {str(e)}')
+
+    def update_status(self, status):
+        self.status_label.setText(status)
+
+    def return_to_menu(self):
+        if hasattr(self, 'voice_thread') and self.voice_thread.isRunning():
+            self.voice_thread.running = False
+            self.voice_thread.wait()
+        self.status_label.setText('Выберите режим')
+        self.mode_selection_widget.setVisible(True)
+        self.return_to_menu_button.setVisible(False)
 
 
-def notification_on(title_my, message_my):
-    notification.notify(title=title_my, message=message_my, app_icon = 'open.ico', timeout = 2 )
-
-def notification_off(title_my, message_my):
-    notification.notify(title=title_my, message=message_my, app_icon = 'close.ico', timeout = 2 )
-
-def listen():
-    while True:
-        data = stream.read(4000, exception_on_overflow=False)
-        if (rec.AcceptWaveform(data)) and (len(data) > 0):
-            answer = json.loads(rec.Result())
-            if answer['text']:
-                yield answer['text']
-
-
-def menu():
-    print('1) Режим 1С')
-    print('2) Обычный режим')
-    print('3) Выход')
-
-
-def copy():
-    pyautogui.hotkey('ctrl', 'c')
-
-def paste():
-    pyautogui.hotkey('ctrl', 'v')
-
-def cut():
-    pyautogui.hotkey('ctrl', 'x')
-
-def find():
-    pyautogui.hotkey('ctrl', 'f')
-
-def delete():
-    keyboard.press('ctrl + shift + left')
-    keyboard.press('delete')
-    time.sleep(0.1)
-    keyboard.release('ctrl + shift + left')
-    keyboard.release('delete')
-
-def tab():
-    keyboard.press('Tab')
-
-def enter():
-    keyboard.press('Enter')
-
-
-def oneCSpeech():
-    print('Выбран режим 1С!')
-    for text in listen():
-        zbstxt = (text.title().replace(' ', '').replace('Пробел', " ").replace("ВосклицательныйЗнак", "!")
-                  .replace("Собака","@").replace('ДвойнаяКавычках','"').replace("Кавычках","'")
-                  .replace('Решётка', "#").replace('Доллар','$').replace('ТочкаСЗапятой', ";")
-                  .replace('Процент',"%").replace('Двоеточие',":")
-                  .replace("АмперСант", "&").replace("АмперСанд", "&").replace("АмперСанкт", "&")
-                  .replace("АмберСанд", "&").replace("АмберСаунд", "&").replace("АмберСанкт", "&")
-                  .replace("АмпирСанд", "&").replace("АмберСант", "&").replace('ВопросительныйЗнак', "?")
-                  .replace('ЗнакВопроса',"?").replace("Звездочка", "*").replace('КвадратнаяСкобкаОткрывается', "[")
-                  .replace('КвадратнаяСкобкаЗакрывается', "]").replace('ФигурнаяСкобкаОткрывается', "{")
-                  .replace('ФигурнаяСкобкаЗакрывается', "}").replace('СкобкаОткрывается', "(")
-                  .replace('СкобкаЗакрывается', ")").replace("Тире", "-").replace('Минус', '-').replace('Плюс', "+")
-                  .replace('Равно',"=").replace("Слэш","/").replace("Один", "1").replace("Два", "2").replace("Три", "3")
-                  .replace("Четыре","4").replace("Пять", "5").replace("Шесть", "6").replace("Семь", "7")
-                  .replace("Восемь","8").replace("Девять","9").replace("Ноль", "0").replace('Точка', ".")
-                  .replace('Запятая',",").replace('НижнееПодчёркивание', "_")
-                  .replace('Больше', ">").replace("Меньше", "<").replace('Андерсон', '&')
-                  .replace("ё", "е").replace("Ё", "Е"))
-
-        if text == 'старт':
-            voice_control_enabled = True
-            notification_on("Vocie1C", "Программа запущена!")
-        elif text == 'стоп':
-            voice_control_enabled = False
-            notification_off("Voice1C", "Программа остановлена!")
-        elif text == 'выйди':
-            break
-        elif voice_control_enabled:
-            if text == "эндер" or text == "интер":
-                enter()
-            elif text == "тап" or text == "табы":
-                tab()
-            elif text == "удали" or text == 'вдали' or text == 'дали':
-                delete()
-            elif text == 'копье':
-                copy()
-            elif text == 'паста':
-                paste()
-            elif text == 'вырезать':
-                cut()
-            elif text == 'поиск':
-                find()
-            else:
-                keyboard.write(zbstxt)
-                #print(zbstext)    #logs
-
-
-def defoultSpeech():
-    print('Выбран обычный режим!')
-    for text in listen():
-        zbstxt = (text.replace("восклицательный знак", "!")
-                  .replace("собака", "@").replace('двойная кавычках', '"').replace("кавычках", "'")
-                  .replace('решётка', "#").replace('доллар', '$').replace('точка с запятой', ";")
-                  .replace('процент', "%").replace('двоеточие', ":")
-                  .replace("ампер сант", "&").replace("ампер санд", "&").replace("ампер санкт", "&")
-                  .replace("амбер санд", "&").replace("амбер саунд", "&").replace("амбер санкт", "&")
-                  .replace("ампир санд", "&").replace("амбер сант", "&").replace('вопросительный знак', "?")
-                  .replace('знак вопроса', "?").replace("звездочка", "*").replace('квадратная скобка открывается', "[")
-                  .replace('квадратная скобка закрывается', "]").replace('фигурная скобка открывается', "{")
-                  .replace('фигурная скобка закрывается', "}").replace('скобка открывается', "(")
-                  .replace('скобка закрывается', ")").replace("тире", "-").replace('минус', '-').replace('плюс', "+")
-                  .replace('равно', "=").replace("слэш", "/").replace("один", "1").replace("два", "2").replace("три", "3")
-                  .replace("четыре", "4").replace("пять", "5").replace("шесть", "6").replace("семь", "7")
-                  .replace("восемь", "8").replace("девять", "9").replace("ноль", "0").replace('точка', ".")
-                  .replace('запятая', ",").replace('нижнее подчёркивание', "_")
-                  .replace('больше', ">").replace("меньше", "<").replace('андерсон', '&')
-                  .replace("ё", "е").replace('пробел', ' ').capitalize())
-        if text == 'старт':
-            voice_control_enabled = True
-            notification_on("Vocie1C", "Программа запущена!")
-        elif text == 'стоп':
-            voice_control_enabled = False
-            notification_off("Voice1C", "Программа остановлена!")
-        elif text == 'выйди':
-            break
-        elif voice_control_enabled:
-            if text == "эндер" or text == "интер":
-                enter()
-            elif text == "тап" or text == "табы":
-                tab()
-            elif text == "удали" or text == 'вдали' or text == 'дали':
-                delete()
-            elif text == 'копье':
-                copy()
-            elif text == 'паста':
-                paste()
-            elif text == 'вырезать':
-                cut()
-            elif text == 'поиск':
-                find()
-            else:
-                keyboard.write(zbstxt)
-
-
-print('Программа запущена!')
-
-while True:
-    menu()
-    choice = input('Выберите режим: ')
-
-    if choice == '1':
-        oneCSpeech()
-        input('Нажмите Enter, чтобы вернуться в меню...')
-    elif choice == '2':
-        defoultSpeech()
-        input('Нажмите Enter, чтобы вернуться в меню...')
-    elif choice == '3':
-        print('До свидания!')
-        break
-    else:
-        print('Ошибка: Введите корректную опцию (1, 2 или 3)')
-
-input()
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = VoiceControlApp()
+    window.show()
+    sys.exit(app.exec_())
