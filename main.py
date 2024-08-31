@@ -2,18 +2,34 @@ import sys
 import json
 import asyncio
 import time
-import keyboard
 import pyaudio
-import pyautogui
+from pynput.keyboard import Key, Controller
 from plyer import notification
 from vosk import Model, KaldiRecognizer
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QLabel, QVBoxLayout, QWidget
 from PyQt5.QtGui import QIcon
+import ctypes  # Для определения языковой раскладки
 import warnings
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
+keyboard = Controller()
+
+# Функция для определения текущей языковой раскладки
+def get_keyboard_layout():
+    user32 = ctypes.windll.user32
+    hwnd = user32.GetForegroundWindow()
+    thread_id = user32.GetWindowThreadProcessId(hwnd, None)
+    layout_id = user32.GetKeyboardLayout(thread_id)
+    # Определение языка по идентификатору
+    lid = layout_id & (2**16 - 1)
+    return lid
+
+# Определение, используется ли русская раскладка
+def is_russian_layout():
+    rus_layout_ids = [0x419]  # Русский идентификатор раскладки
+    return get_keyboard_layout() in rus_layout_ids
 
 class VoiceThread(QThread):
     update_status_signal = pyqtSignal(str)
@@ -24,6 +40,7 @@ class VoiceThread(QThread):
         self.mode = mode
         self.running = True
         self.voice_control_enabled = False
+        self.russian_layout = is_russian_layout()  # Определяем раскладку при запуске
 
     def run(self):
         asyncio.run(self.async_run())
@@ -52,11 +69,11 @@ class VoiceThread(QThread):
 
                 zbstxt = self.process_text(text)
 
-                if text == 'старт':
+                if text in ['старт']:
                     self.voice_control_enabled = True
                     self.update_status_signal.emit('Голосовое управление включено!')
                     notification.notify(title="Voice1C", message="Программа запущена!", app_icon='open.ico', timeout=2)
-                elif text == 'стоп':
+                elif text in ['стоп', 'сто']:
                     self.voice_control_enabled = False
                     self.update_status_signal.emit('Голосовое управление остановлено!')
                     notification.notify(title="Voice1C", message="Программа остановлена!", app_icon='close.ico',
@@ -103,52 +120,67 @@ class VoiceThread(QThread):
             text = text.title().replace(' ', '')
             text = text.replace('Пробел', ' ')
             text = text.replace('=', ' = ')
-            text = text.replace(',',', ')
+            text = text.replace(',', ', ')
         else:
-            text = text.replace('пробел', ' ').capitalize()
+            text = text.replace('пробел', ' ')
 
         return text
 
     async def perform_action_async(self, text, zbstxt):
         if text in ["эндер", "интер", "эмбер", "центр"]:
-            await asyncio.to_thread(keyboard.press_and_release, 'Enter')
+            await asyncio.to_thread(self.press_and_release, Key.enter)
         elif text in ["тап", "табы", "тапа", "бы"]:
-            await asyncio.to_thread(keyboard.press_and_release, 'Tab')
+            await asyncio.to_thread(self.press_and_release, Key.tab)
         elif text in ["удали", "вдали", "дали"]:
             await asyncio.to_thread(self.delete_word)
-        elif text in ["точка с запятой"]:
-            await asyncio.to_thread(keyboard.write, ';')
-            await asyncio.to_thread(pyautogui.hotkey, 'enter')
-        elif text in ['лево', 'лева', 'влево', 'слева']:
+        elif text in ['лево', 'влево', 'слева', "лева"]:
             await asyncio.to_thread(self.left)
-        elif text in ['право', 'права', 'вправо', 'правы', 'справа', 'в праву']:
+        elif text in ['право', 'вправо', 'справа', 'в праву', "права", "праву"]:
             await asyncio.to_thread(self.right)
-        elif text == "копье":
-            await asyncio.to_thread(pyautogui.hotkey, 'ctrl', 'c')
-            time.sleep(1)
-        elif text == "паста":
-            await asyncio.to_thread(pyautogui.hotkey, 'ctrl', 'v')
-        elif text == "вырезать":
-            await asyncio.to_thread(pyautogui.hotkey, 'ctrl', 'x')
+        elif text in ["копье", "копья", "копия"]:
+            await asyncio.to_thread(self.copy_text)
+        elif text in ["паста", "посты", "пост", "пастель", "паства", "пастырь", "пасту", "баста", "постов"]:
+            await asyncio.to_thread(self.paste_text)
+        elif text in ["вырезать", 'вязать']:
+            await asyncio.to_thread(self.cut_text)
         elif text == "поиск":
-            await asyncio.to_thread(pyautogui.hotkey, 'ctrl', 'f')
+            await asyncio.to_thread(self.search_text)
         else:
-            await asyncio.to_thread(keyboard.write, zbstxt)
+            await asyncio.to_thread(self.write_text, zbstxt)
+
+    def press_and_release(self, key):
+        keyboard.press(key)
+        time.sleep(0.05)
+        keyboard.release(key)
 
     def left(self):
-        keyboard.press_and_release('left')
+        self.press_and_release(Key.left)
 
     def right(self):
-        keyboard.press_and_release('right')
+        self.press_and_release(Key.right)
 
     def delete_word(self):
-        keyboard.press('ctrl')
-        keyboard.press('backspace')
+        with keyboard.pressed(Key.ctrl):
+            self.press_and_release(Key.backspace)
 
-        time.sleep(0.05)
+    def copy_text(self):
+        with keyboard.pressed(Key.ctrl):
+            self.press_and_release('с' if self.russian_layout else 'c')  # Замена на 'с' если русская раскладка
 
-        keyboard.release('backspace')
-        keyboard.release('ctrl')
+    def paste_text(self):
+        with keyboard.pressed(Key.ctrl):
+            self.press_and_release('м' if self.russian_layout else 'v')  # Замена на 'м' если русская раскладка
+
+    def cut_text(self):
+        with keyboard.pressed(Key.ctrl):
+            self.press_and_release('ч' if self.russian_layout else 'x')  # Замена на 'ч' если русская раскладка
+
+    def search_text(self):
+        with keyboard.pressed(Key.ctrl):
+            self.press_and_release('а' if self.russian_layout else 'f')  # Замена на 'а' если русская раскладка
+
+    def write_text(self, text):
+        keyboard.type(text)
 
 class VoiceControlApp(QMainWindow):
     def __init__(self):
