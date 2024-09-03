@@ -3,51 +3,51 @@
 
 /* Основные стили для главного окна */
 QMainWindow {
-    background-color: #FFFFFF; /* Белый фон */
+    background-color: #FFFFFF; 
     border: 1px solid #B0B0B0;
-    font-family: 'Lato', sans-serif; /* Современный шрифт */
+    font-family: 'Lato', sans-serif; 
 }
 
 /* Стили для меток (надписей) */
 QLabel {
-    font-size: 18px; /* Размер шрифта увеличен для лучшей видимости */
-    color: #333; /* Темно-серый цвет текста */
+    font-size: 18px; 
+    color: #333; 
     text-align: center;
     margin-bottom: 20px;
-    font-weight: 400; /* Обычный шрифт */
+    font-weight: 400; 
 }
 
 /* Стили для заголовков */
 QLabel#title {
-    font-size: 24px; /* Увеличенный размер шрифта для заголовка */
-    font-weight: 700; /* Жирный шрифт для заголовка */
+    font-size: 24px; 
+    font-weight: 700; 
 }
 
 /* Стили для кнопок */
 QPushButton {
-    background-color: #F7B72C; /* Основной желтый цвет кнопок */
-    border: 2px solid #F7A000; /* Темно-желтый бордер */
-    border-radius: 12px; /* Скругленные углы */
+    background-color: #F7B72C; 
+    border: 2px solid #F7A000; 
+    border-radius: 12px; 
     padding: 12px;
-    font-size: 14px; /* Размер шрифта на кнопках уменьшен для лучшего умещения текста */
-    color: #FFFFFF; /* Белый цвет текста на кнопке */
-    width: 220px; /* Ширина кнопок увеличена */
+    font-size: 14px; 
+    color: #FFFFFF; 
+    width: 220px; 
     text-align: center;
-    font-family: 'Lato', sans-serif; /* Современный шрифт для кнопок */
-    font-weight: 700; /* Жирный шрифт для текста на кнопках */
-    white-space: nowrap; /* Предотвращает перенос текста */
-    overflow: hidden; /* Обрезает текст, который не помещается */
-    text-overflow: ellipsis; /* Добавляет многоточие, если текст не помещается */
+    font-family: 'Lato', sans-serif; 
+    font-weight: 700;
+    white-space: nowrap; 
+    overflow: hidden;
+    text-overflow: ellipsis; 
 }
 
 /* Стили при наведении на кнопку */
 QPushButton:hover {
-    background-color: #F7A000; /* Светлее желтый при наведении */
+    background-color: #F7A000; 
 }
 
 /* Стили при нажатии на кнопку */
 QPushButton:pressed {
-    background-color: #F79F00; /* Более темный желтый при нажатии */
+    background-color: #F79F00; 
 }
 
 /* Стили для основного лейаута и выравнивания содержимого */
